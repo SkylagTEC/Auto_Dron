@@ -1,19 +1,50 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+#                   ---- Pendientes codigo ----                     #
+#--- 1- Poder hacer que se mantenga elevado el tiempo que quiera ---#
+#--- 2- Probar la camara si ya no presenta retraso ----              #
+
 import copy
 import time
 import argparse
+import threading
 
 import cv2 as cv
 from pupil_apriltags import Detector
+from dron_tello import DroneController
+
+## Optimizar el proceso del video
+class VideoStream():
+    def __init__(self, drone):
+        self.drone = drone
+        self.frame = None
+        self.stopped = False
+        self.stream_thread = threading.Thread(target=self.update, args=())
+        self.stream_thread.daemon = True  # Para cerrar con el programa principal
+    
+    def start(self):
+        self.stopped = False
+        self.stream_thread.start()
+        return self
+    
+    def update(self):
+        while not self.stopped:
+            self.frame = self.drone.get_frame_read().frame
+    
+    def read(self):
+        return self.frame
+    
+    def stop(self):
+        self.stopped = True
+        self.stream_thread.join()
 
 
 def get_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--device", type=int, default=0)  # Dispositivo camara
-    parser.add_argument("--width", help='cap width', type=int, default=960) #Ancho de la camara
-    parser.add_argument("--height", help='cap height', type=int, default=540) #Altura de la camara
+    parser.add_argument("--width", help='cap width', type=int, default=2592) #Ancho de la camara
+    parser.add_argument("--height", help='cap height', type=int, default=1936) #Altura de la camara
 
     parser.add_argument("--families", type=str, default='tag36h11')  # Familia de Apriltag (cada apriltags tienen su familia)
     parser.add_argument("--nthreads", type=int, default=1)  #Numero de hilos para el detector
@@ -29,13 +60,23 @@ def get_args():
 
 
 def main():
-    # 引数解析 #################################################################
+    #Inicializador el controlador del dron
+    drone = DroneController()
+    drone.connect_drone()
+
+    
+    #Transmicion del video  
+    frame_reader = drone.start_video_stream()
+    
     args = get_args()
-
-    cap_device = args.device
-    cap_width = args.width
-    cap_height = args.height
-
+    
+    
+    
+    
+    #cap_device = scren_tello()
+    #cap_width = args.width
+    #cap_height = args.height
+    
     families = args.families
     nthreads = args.nthreads
     quad_decimate = args.quad_decimate
@@ -44,12 +85,11 @@ def main():
     decode_sharpening = args.decode_sharpening
     debug = args.debug
 
-    # カメラ準備 ###############################################################
-    cap = cv.VideoCapture(cap_device)
-    cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
-    cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
+    #cap = cv.VideoCapture(cap_device)
+    #cap.set(cv.CAP_PROP_FRAME_WIDTH, cap_width)
+    #cap.set(cv.CAP_PROP_FRAME_HEIGHT, cap_height)
 
-    # Detector準備 #############################################################
+    # Inicializacion del detector de apriltag
     at_detector = Detector(
         families=families,
         nthreads=nthreads,
@@ -61,47 +101,43 @@ def main():
     )
 
     elapsed_time = 0
+    drone.take_off_fun()
+    drone.rot_fun()
 
     while True:
         start_time = time.time()
-
-        # カメラキャプチャ #####################################################
-        ret, image = cap.read()
-        if not ret:
+        frame = frame_reader.frame
+        if frame is None:
+            print("No se puede conectar al frame de la camara ")
             break
-        debug_image = copy.deepcopy(image)
-
-        # 検出実施 #############################################################
-        image = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+        
+        #Escala de grises
+        gray = cv.cvtColor(frame,cv.COLOR_BGR2GRAY)
+        
+        #Detectar los AprilTags
         tags = at_detector.detect(
-            image,
+            gray,
             estimate_tag_pose=False,
             camera_params=None,
             tag_size=None,
         )
 
-        # 描画 ################################################################
-        debug_image = draw_tags(debug_image, tags, elapsed_time)
-
+        debug_image = draw_tags(frame, tags, elapsed_time)
         elapsed_time = time.time() - start_time
-
-        # キー処理(ESC：終了) #################################################
+        
+        #Tecla de escape
         key = cv.waitKey(1)
         if key == 27:  # ESC
             break
-
-        # 画面反映 #############################################################
+        
         cv.imshow('AprilTag Detect Demo', debug_image)
-
-    cap.release()
+    
+    
+    drone.stop_video_stream()
     cv.destroyAllWindows()
 
 
-def draw_tags(
-    image,
-    tags,
-    elapsed_time,
-):
+def draw_tags(image,tags,elapsed_time,):
     for tag in tags:
         tag_family = tag.tag_family
         tag_id = tag.tag_id
@@ -140,8 +176,7 @@ def draw_tags(
                "Elapsed Time:" + '{:.1f}'.format(elapsed_time * 1000) + "ms",
                (10, 30), cv.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2,
                cv.LINE_AA)
-
-
+    
     return image
 
 
